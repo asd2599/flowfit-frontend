@@ -112,7 +112,7 @@ export async function suggestAccountCode(vendor, notes) {
  */
 export function getImageUrl(imagePath) {
   if (!imagePath) return null
-  return `${BASE_URL}/${imagePath}`
+  return `${BASE_URL}/api/finance/receipts/${imagePath}`
 }
 
 /**
