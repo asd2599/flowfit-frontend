@@ -3,7 +3,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import Breadcrumb from '../../../components/layout/Breadcrumb'
 import {
   analyzeReceipt, saveTransactions, getTransactions,
-  updateTransaction, confirmTransaction, exportConfirmedExcel,
+  updateTransaction, confirmTransaction, deleteTransaction, exportConfirmedExcel,
   getImageUrl, suggestAccountCode,
 } from '../../../api/finance'
 import { getAuthSession } from '../../../api/auth'
@@ -647,6 +647,14 @@ function LedgerTab({ session, onManualEntry }) {
   // 확정 처리 중인 ID Set
   const [confirmingIds, setConfirmingIds] = useState(new Set())
 
+  // 삭제 처리 중인 ID Set
+  const [deletingIds, setDeletingIds] = useState(new Set())
+
+  // 체크박스 선택
+  const [selectedIds, setSelectedIds]   = useState(new Set())
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [bulkConfirming, setBulkConfirming] = useState(false)
+
   // 이미지 모달
   const [modalImage, setModalImage] = useState(null)
 
@@ -671,6 +679,7 @@ function LedgerTab({ session, onManualEntry }) {
       setItems(data.items)
       setTotal(data.total)
       setPage(pg)
+      setSelectedIds(new Set())
     } catch (e) {
       setError(e.message)
     } finally {
@@ -716,6 +725,74 @@ function LedgerTab({ session, onManualEntry }) {
       setError(e.message)
     } finally {
       setConfirmingIds(prev => { const s = new Set(prev); s.delete(id); return s })
+    }
+  }
+
+  // 전표 삭제
+  async function handleDelete(id) {
+    if (!window.confirm('이 전표를 삭제하시겠습니까?')) return
+    setDeletingIds(prev => new Set(prev).add(id))
+    try {
+      await deleteTransaction(id)
+      setItems(prev => prev.filter(item => item.id !== id))
+      setTotal(prev => prev - 1)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setDeletingIds(prev => { const s = new Set(prev); s.delete(id); return s })
+    }
+  }
+
+  // 체크박스 헬퍼
+  const allSelected  = items.length > 0 && items.every(r => selectedIds.has(r.id))
+  const someSelected = selectedIds.size > 0
+
+  function toggleSelect(id) {
+    setSelectedIds(prev => {
+      const s = new Set(prev)
+      s.has(id) ? s.delete(id) : s.add(id)
+      return s
+    })
+  }
+
+  function toggleSelectAll() {
+    setSelectedIds(allSelected ? new Set() : new Set(items.map(r => r.id)))
+  }
+
+  // 일괄 삭제
+  async function handleBulkDelete() {
+    if (!window.confirm(`선택한 ${selectedIds.size}건을 삭제하시겠습니까?`)) return
+    setBulkDeleting(true)
+    const ids = [...selectedIds]
+    try {
+      await Promise.all(ids.map(id => deleteTransaction(id)))
+      setItems(prev => prev.filter(item => !selectedIds.has(item.id)))
+      setTotal(prev => prev - ids.length)
+      setSelectedIds(new Set())
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBulkDeleting(false)
+    }
+  }
+
+  // 일괄 확정
+  async function handleBulkConfirm() {
+    const pendingIds = [...selectedIds].filter(id =>
+      items.find(r => r.id === id)?.status !== 'confirmed'
+    )
+    if (!pendingIds.length) return
+    setBulkConfirming(true)
+    try {
+      await Promise.all(pendingIds.map(id => confirmTransaction(id)))
+      setItems(prev => prev.map(item =>
+        selectedIds.has(item.id) ? { ...item, status: 'confirmed' } : item
+      ))
+      setSelectedIds(new Set())
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBulkConfirming(false)
     }
   }
 
@@ -805,6 +882,37 @@ function LedgerTab({ session, onManualEntry }) {
 
       {!loading && items.length > 0 && (
         <div className="rounded-xl border border-gray-200 overflow-hidden">
+          {/* 일괄 액션 바 — 선택 시 표시 */}
+          {someSelected && (
+            <div className="px-5 py-2.5 border-b border-blue-100 bg-blue-50 flex items-center gap-3 flex-wrap">
+              <span className="text-sm font-medium text-blue-700">
+                {selectedIds.size}건 선택됨
+              </span>
+              <button
+                onClick={handleBulkConfirm}
+                disabled={bulkConfirming || bulkDeleting}
+                className="min-h-[32px] px-4 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700
+                  text-white text-xs font-medium disabled:opacity-60 transition-colors flex items-center gap-1.5"
+              >
+                {bulkConfirming ? <><Spinner size={3} /> 처리 중...</> : '일괄 확정'}
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                disabled={bulkDeleting || bulkConfirming}
+                className="min-h-[32px] px-4 py-1 rounded-lg bg-red-500 hover:bg-red-600
+                  text-white text-xs font-medium disabled:opacity-60 transition-colors flex items-center gap-1.5"
+              >
+                {bulkDeleting ? <><Spinner size={3} /> 처리 중...</> : '일괄 삭제'}
+              </button>
+              <button
+                onClick={() => setSelectedIds(new Set())}
+                className="text-xs text-blue-500 hover:underline min-h-[32px]"
+              >
+                선택 해제
+              </button>
+            </div>
+          )}
+
           {/* 테이블 요약 + 수기등록 + 엑셀 다운로드 */}
           <div className="px-5 py-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between flex-wrap gap-2">
             <span className="text-sm font-semibold text-gray-900">
@@ -860,6 +968,14 @@ function LedgerTab({ session, onManualEntry }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-xs text-gray-500 border-b border-gray-100">
+                  <th className="text-center px-3 py-2.5 font-medium w-10">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={toggleSelectAll}
+                      className="w-4 h-4 rounded accent-blue-600 cursor-pointer"
+                    />
+                  </th>
                   <th className="text-center px-3 py-2.5 font-medium w-10">이미지</th>
                   <th className="text-left px-4 py-2.5 font-medium">날짜</th>
                   <th className="text-left px-4 py-2.5 font-medium">거래처</th>
@@ -877,10 +993,20 @@ function LedgerTab({ session, onManualEntry }) {
                 {items.map(row => {
                   const isEditing    = editingId === row.id
                   const isConfirming = confirmingIds.has(row.id)
+                  const isDeleting   = deletingIds.has(row.id)
                   const imgUrl       = getImageUrl(row.image_path)
 
                   return (
-                    <tr key={row.id} className="hover:bg-gray-50 transition-colors">
+                    <tr key={row.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(row.id) ? 'bg-blue-50' : ''}`}>
+                      {/* 체크박스 */}
+                      <td className="px-3 py-2 text-center">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(row.id)}
+                          onChange={() => toggleSelect(row.id)}
+                          className="w-4 h-4 rounded accent-blue-600 cursor-pointer"
+                        />
+                      </td>
                       {/* 이미지 썸네일 */}
                       <td className="px-3 py-2 text-center">
                         {imgUrl ? (
@@ -1011,9 +1137,16 @@ function LedgerTab({ session, onManualEntry }) {
                                   {isConfirming ? <Spinner /> : '최종 확정'}
                                 </button>
                               )}
-                              {row.status === 'confirmed' && (
-                                <span className="text-xs text-gray-400">—</span>
-                              )}
+                              {/* 삭제 버튼 — 모든 상태에서 표시 */}
+                              <button
+                                onClick={() => handleDelete(row.id)}
+                                disabled={isDeleting}
+                                className="min-h-[30px] px-3 py-1 rounded-lg border border-red-200
+                                  text-red-500 text-xs hover:bg-red-50 transition-colors
+                                  disabled:opacity-60"
+                              >
+                                {isDeleting ? <Spinner /> : '삭제'}
+                              </button>
                             </>
                           )}
                         </div>

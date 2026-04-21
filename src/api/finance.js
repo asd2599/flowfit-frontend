@@ -74,6 +74,17 @@ export async function confirmTransaction(id) {
 }
 
 /**
+ * 전표 삭제 (이미지 고아 시 receipt_images도 함께 삭제)
+ * @param {number} id
+ */
+export async function deleteTransaction(id) {
+  const res = await fetch(`${BASE_URL}/api/finance/transactions/${id}`, {
+    method: 'DELETE',
+  })
+  return handleResponse(res)
+}
+
+/**
  * 확정 전표 엑셀 다운로드
  */
 export async function exportConfirmedExcel() {
